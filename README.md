@@ -1,97 +1,125 @@
 # TrustBound
 
-**Continuous spatial & hardware authentication for Zero Trust architectures.**
+**Неперервна просторова та апаратна автентифікація для архітектур нульової довіри (Zero Trust).**
 
-> The physical perimeter is the new cryptographic boundary — we don't trust a device until we can mathematically prove *exactly where it is*.
+> Фізичний периметр — це новий криптографічний кордон: ми не довіряємо пристрою, доки математично не доведемо, *де саме він знаходиться*.
 
-🌐 Live site & interactive demo: **https://trustbound.forum** · ✉️ **trustbound67@gmail.com**
-🇬🇧 English (this branch `en`) · 🇺🇦 Ukrainian: branch [`uk`](../../tree/uk)
+🌐 Сайт і живе демо: **https://trustbound.forum** · ✉️ **trustbound67@gmail.com**
+🇺🇦 Українською (ця гілка `uk`) · 🇬🇧 English: гілка [`en`](../../tree/en)
 
 ---
 
-## The problem
+## Проблема
 
-Identity & Access Management verifies you **once, at login** — then goes blind to the device's physical movement. With valid credentials, a live session and an intact TPM, an attacker can carry an unlocked laptop out of a secure zone and keep full access. Manual revocation takes hours to days; a single R&D leak costs millions.
+Класичний контроль доступу перевіряє вас **один раз — на вході**, а далі не бачить фізичного руху пристрою. Маючи валідні облікові дані, активну сесію й непошкоджений TPM, зловмисник може винести розблокований ноутбук із захищеної зони й зберегти повний доступ. Ручне відкликання триває години-дні; один витік R&D коштує мільйони.
 
-## The idea
+## Ідея
 
-Access is not a door you open once — it's a **stream you must keep earning**. Every ~3–5 seconds the device must re-prove **three independent facts**:
+Доступ — це не двері, які відчинили раз, а **потік, який треба постійно заслуговувати**. Кожні ~3–5 секунд пристрій мусить наново довести **три незалежні факти**:
 
-| Layer | Technology | Proves |
-|-------|-----------|--------|
-| Hardware root of trust | **TPM 2.0** (PCR, TPM Quote, EK/AK) | Same, untampered device |
-| Macro-location | **GNSS / Galileo** (+ OSNMA) | In the allowed building / geofence |
-| Micro-positioning | **UWB** (IEEE 802.15.4z, ToF, STS) | Physically in this room, now |
+| Рівень | Технологія | Що доводить |
+|--------|-----------|-------------|
+| Апаратний корінь довіри | **TPM 2.0** (PCR, TPM Quote, EK/AK) | Той самий, непідмінений пристрій |
+| Макро-локація | **GNSS / Galileo** (+ OSNMA) | У дозволеній будівлі / геозоні |
+| Мікропозиціювання | **UWB** (IEEE 802.15.4z, ToF, STS) | Фізично в цій кімнаті, зараз |
 
-## Architecture
+## Архітектура
 
 ```mermaid
+%%{init: {'theme':'dark','themeVariables':{'fontSize':'16px','clusterBkg':'#0a1526','clusterBorder':'#33507a','lineColor':'#6b86ad','edgeLabelBackground':'#0a1526'}}}%%
 flowchart LR
-  TPM[TPM 2.0] --> A
-  GEO[GNSS / Galileo] --> A
-  UWB[UWB anchors<br/>signed ranges] --> A
-  A[TrustBound Agent<br/>on device] -->|Ed25519-signed evidence| S[TrustBound Server]
-  S -->|nonce + random quorum| A
-  S -->|K_epoch only if all pass| G[Gateway]
-  G --> R[(Protected resources)]
+  subgraph DEV[" На пристрої"]
+    direction TB
+    TPM[" TPM 2.0<br/>цілісність пристрою"]:::dev
+    GEO[" GNSS / Galileo<br/>локація"]:::dev
+    UWB[" UWB-маяки<br/>підписані відстані в кімнаті"]:::dev
+    AG[" Агент TrustBound<br/>збирає й підписує докази"]:::agent
+    TPM --> AG
+    GEO --> AG
+    UWB --> AG
+  end
+  subgraph SRV[" Бекенд TrustBound"]
+    direction TB
+    S[" Сервер<br/>перевіряє й видає ключі"]:::srv
+    GW[" Шлюз<br/>застосовує ключ"]:::srv
+    R[" Захищені<br/>ресурси"]:::res
+    S -->|"K_epoch · дійсний ~3–5 с"| GW
+    GW --> R
+  end
+  AG ==>|"① докази, підпис Ed25519"| S
+  S -.->|"② nonce + випадковий кворум"| AG
+  classDef dev fill:#12213c,stroke:#4f8cff,color:#eaf2ff;
+  classDef agent fill:#173a63,stroke:#7fb0ff,color:#eaf2ff,stroke-width:2px;
+  classDef srv fill:#0b332d,stroke:#35d0ba,color:#eaf2ff;
+  classDef res fill:#3a2a10,stroke:#f4b740,color:#ffedc2;
 ```
 
-## How verification works (every ~3–5 s)
+## Як працює перевірка (кожні ~3–5 с)
 
 ```mermaid
+%%{init: {'theme':'dark','themeVariables':{'actorBkg':'#12213c','actorBorder':'#4f8cff','actorTextColor':'#eaf2ff','signalColor':'#6b86ad','signalTextColor':'#cfe0f5','noteBkgColor':'#0e2038','noteTextColor':'#cfe0f5','noteBorderColor':'#33507a','labelBoxBkgColor':'#0b332d','labelBoxBorderColor':'#35d0ba','labelTextColor':'#eaf2ff'}}}%%
 sequenceDiagram
-  participant S as Server
-  participant A as Agent
-  S->>A: nonce + challenge (random 3 of 5 beacons)
-  A->>A: TPM Quote + GPS fix + signed UWB ranges
-  A->>S: Ed25519-signed evidence bundle
-  S->>S: verify TPM · GEO · UWB quorum · nonce
-  alt all valid
-    S-->>A: derive K_epoch (HKDF) → access ~3–5 s
-  else any check fails
-    S-->>A: DENY → no key, data stays encrypted
+  autonumber
+  participant S as Сервер
+  participant A as Агент · пристрій
+  Note over S,A: нова епоха кожні ~3–5 секунд
+  S->>A: nonce + челендж (випадкові 3 з 5 маяків)
+  A->>A: збирає TPM Quote · GPS · підписані UWB-відстані
+  A->>S: підписаний Ed25519 бандл доказів
+  S->>S: перевірка TPM · локація · UWB-кворум · nonce
+  alt  усі перевірки пройдено
+    S-->>A: вивід K_epoch (HKDF) → доступ ~3–5 с
+  else  хоч одна провалена — виніс, спуфінг, підміна
+    S-->>A: ВІДМОВА → ключа немає · дані зашифровані (AES-256-GCM)
   end
 ```
 
-Leave the room → the beacons can't confirm presence → the next key `K_epoch` is never derived → access dies in seconds and resources stay encrypted (AES-256-GCM).
+Вийшов із кімнати → маяки не підтверджують присутність → наступний ключ `K_epoch` не виводиться → доступ гасне за секунди, а дані лишаються зашифрованими (AES-256-GCM).
 
-## Two core innovations
+## Дві ключові інновації
 
-- **Random Witness Quorum** — the server randomly picks a subset of UWB beacons each round (e.g. 3 of 5). You can't pre-forge what you can't predict; to fool it you'd need every beacon at once.
-- **Presence-Bound Key Stream** — short-lived keys derived via **HKDF-SHA256** *only* when TPM + GEO + UWB quorum + a fresh server challenge all pass. No proof → no key.
+- **Random Witness Quorum** — сервер щоразу випадково обирає підмножину маяків (напр. 3 з 5). Не можна підробити те, чого не передбачив; щоб обдурити, треба контролювати всі маяки одночасно.
+- **Presence-Bound Key Stream** — короткоживучі ключі виводяться через **HKDF-SHA256** *лише* коли TPM + GEO + UWB-кворум + свіжий серверний челендж усі пройшли. Немає доказу → немає ключа.
 
-## Technology
+## Технології
 
-- **Crypto:** Ed25519 (signatures), HKDF-SHA256 + HMAC-SHA256 (key stream), AES-256-GCM (sealing), TLS 1.3 mTLS; PQC-ready (ML-KEM / ML-DSA).
-- **Hardware:** TPM 2.0, GNSS/Galileo receiver, UWB radio (IEEE 802.15.4z / FiRa), beacons with Secure Element keys.
-- **Software:** client agent + central server — Python (FastAPI), hot paths in Go/Rust, C/C++ for TPM (TSS/tpm2-tools) and UWB; deployed in **Docker**; tamper-evident audit (hash chain).
+- **Криптографія:** Ed25519 (підписи), HKDF-SHA256 + HMAC-SHA256 (потік ключів), AES-256-GCM (шифрування), TLS 1.3 mTLS; готовність до PQC (ML-KEM / ML-DSA).
+- **Апаратне:** TPM 2.0, приймач GNSS/Galileo, UWB-радіо (IEEE 802.15.4z / FiRa), маяки з ключами в Secure Element.
+- **Програмне:** клієнтський агент + центральний сервер — Python (FastAPI), критичні місця на Go/Rust, C/C++ для TPM (TSS/tpm2-tools) і UWB; розгортання в **Docker**; журнал без підробки (ланцюжок хешів).
 
-## Attack resistance
+## Стійкість до атак
 
-| Attack | Why it fails |
-|--------|--------------|
-| 🚪 Device theft | Out of room → no UWB quorum → no key |
-| 🛰 GPS spoofing | UWB needs signed in-room replies; Galileo OSNMA flags forgery |
-| 🧬 Boot/TPM tampering | PCR ≠ golden values → TPM Quote fails |
-| 📡 Beacon jamming | Random k-of-n quorum → must jam all; else fail-secure |
-| ⏪ Replay / MITM | Fresh nonce + epoch, mTLS, Ed25519 signatures |
+| Атака | Чому падає |
+|-------|-----------|
+| 🚪 Крадіжка пристрою | Поза кімнатою → немає UWB-кворуму → немає ключа |
+| 🛰 Спуфінг GPS | UWB вимагає підписаних відповідей у кімнаті; Galileo OSNMA викриває підробку |
+| 🧬 Підміна boot/TPM | PCR ≠ еталон → TPM Quote не проходить |
+| 📡 Глушіння маяка | Випадковий кворум k-of-n → треба глушити всі; інакше fail-secure |
+| ⏪ Повтор / MITM | Свіжий nonce + епоха, mTLS, підписи Ed25519 |
 
-## The website — trustbound.forum
+## Сайт — trustbound.forum
 
-A multi-page bilingual (UA/EN) product site with a **live interactive demo** (`/program/`): drag a laptop around a room and watch access revoke in real time, with **real in-browser cryptography** (HKDF · Ed25519 · AES-GCM). Pages: Home, Benefits, **Tech** (full deep-dive), Implementation (the demo). Served over HTTPS (Let's Encrypt) on an Ubuntu/Nginx VPS.
+Багатосторінковий двомовний (UA/EN) сайт із **живим інтерактивним демо** (`/program/`): перетягуєш ноутбук по кімнаті й бачиш, як доступ відбирається в реальному часі, зі **справжньою криптографією у браузері** (HKDF · Ed25519 · AES-GCM). Сторінки: Головна, Переваги, **Технічно** (повний розбір), Реалізація (демо). HTTPS (Let's Encrypt) на Ubuntu/Nginx VPS.
 
-## Standards & standardization
+## Стандарти та стандартизація
 
-Built on open standards and mapped onto Zero Trust models — see **[docs/STANDARDS.md](docs/STANDARDS.md)**.
+Побудовано на відкритих стандартах і лягає на моделі Zero Trust — див. **[docs/STANDARDS.md](docs/STANDARDS.md)**.
 
 ```mermaid
+%%{init: {'theme':'dark','themeVariables':{'fontSize':'15px','lineColor':'#6b86ad'}}}%%
 flowchart LR
-  P1["Phase 1 · M1-6<br/>MVP on UWB dev boards + TPM 2.0 API"] --> P2["Phase 2 · M6-12<br/>PoC in lab + Linux/Windows daemon"] --> P3["Phase 3 · Year 2<br/>Crypto audit + state cert (SSSCZI) + first paid pilot"]
+  P1["<b>Фаза 1 · міс 1–6</b><br/> MVP на UWB-платах<br/> Інтеграція TPM 2.0 API<br/> Оптимізація затримок"]:::a
+  P2["<b>Фаза 2 · міс 6–12</b><br/> PoC у лабораторії<br/> Демон Linux / Windows"]:::b
+  P3["<b>Фаза 3 · Рік 2</b><br/> Незалежний криптоаудит<br/> Держсертифікація (Держспецзв'язку)<br/> Перший платний пілот"]:::c
+  P1 ==> P2 ==> P3
+  classDef a fill:#12213c,stroke:#4f8cff,color:#eaf2ff;
+  classDef b fill:#0b2f3a,stroke:#52d6ff,color:#eaf2ff;
+  classDef c fill:#0b332d,stroke:#35d0ba,color:#eaf2ff;
 ```
 
-## Team
+## Команда
 
-Cadets of the Institute of Special Communications and Information Protection (ISCIP), Igor Sikorsky Kyiv Polytechnic Institute — major **Cybersecurity**, CTF team **LeetSh4d0ws**.
+Студенти КПІ ім. Ігоря Сікорського — спеціальність **Кібербезпека**, CTF-команда **LeetSh4d0ws**.
 
 ---
-*Status: early R&D / pre-seed. Concept + working demo. Grounded in NIST SP 800-207 and the DoD Zero Trust Strategy.*
+*Статус: рання стадія R&D / pre-seed. Концепт + робоче демо. Ґрунтується на NIST SP 800-207 і DoD Zero Trust Strategy.*
